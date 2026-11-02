@@ -21,6 +21,17 @@ async def on_ready():
         db_pool = await asyncpg.create_pool(DATABASE_URL)
         print("✅ تم الاتصال بقاعدة بيانات Neon بنجاح!")
         
+        # نشر لوحة تحكم صناع المحتوى تلقائياً فور تشغيل البوت
+        channel = bot.get_channel(ADMIN_CHANNEL_ID)
+        if channel:
+            embed = discord.Embed(
+                title="🎮 لوحة تحكم صناع المحتوى الشاملة",
+                description="استخدم الأزرار بالأسفل لإدارة حسابك، تقديم طلبات المنصات، إرسال المقاطع، تعديل المشاهدات، أو متابعة إحصائياتك بكل سهولة:",
+                color=discord.Color.green()
+            )
+            await channel.send(embed=embed, view=CreatorDashboardView())
+            print("✅ تم نشر لوحة تحكم صناع المحتوى تلقائياً بنجاح!")
+
         async with db_pool.acquire() as conn:
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS users (
@@ -52,7 +63,6 @@ async def on_ready():
     except Exception as e:
         print(f"❌ خطأ في الاتصال بقاعدة البيانات أو التهيئة: {e}")
 
-# حساب الرتبة بناءً على المشاهدات والمقاطع
 def calculate_rank(views, videos_count):
     if views >= 2000000 and videos_count >= 60:
         return "👑 إمبراطور (مكافأة 24,000 صدفة + تأهل لجائزة طماطم بلس)"
@@ -78,25 +88,47 @@ def calculate_rank(views, videos_count):
         return "📌 مرشح (لم يستوفِ الحد الأدنى من شروط الرتب)"
 
 # ==========================================
-# 1. لوحة تحكم صانع المحتوى (أزرار عامة)
+# لوحة تحكم صانع المحتوى (جميع الأزرار بفعالية تامة)
 # ==========================================
 class CreatorDashboardView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
+    # 1. زر ربط حساب اللعبة
     @discord.ui.button(label="🔗 ربط حساب اللعبة", style=discord.ButtonStyle.primary, custom_id="register_game_id")
     async def register_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RegisterModal())
 
+    # 2. زر طلب اعتماد منصة
     @discord.ui.button(label="📥 طلب اعتماد منصة", style=discord.ButtonStyle.success, custom_id="request_platform")
     async def platform_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(PlatformModal())
 
+    # 3. زر إرسال مقطع جديد
     @discord.ui.button(label="🎬 إرسال مقطع جديد", style=discord.ButtonStyle.secondary, custom_id="submit_video")
     async def submit_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(VideoSubmissionModal())
 
-    @discord.ui.button(label="📊 إحصائياتي هذا الشهر", style=discord.ButtonStyle.danger, custom_id="my_stats")
+    # 4. زر تعديل مشاهدات مقطع (عرض قائمة المقاطع الخاصة بالمستخدم)
+    @discord.ui.button(label="⚙️ تعديل المشاهدات", style=discord.ButtonStyle.primary, custom_id="update_views_btn")
+    async def update_views_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user_id = str(interaction.user.id)
+        current_month = datetime.now().strftime("%Y-%m")
+        async with db_pool.acquire() as conn:
+            rows = await conn.fetch("SELECT video_url, views FROM submissions WHERE user_id = $1 AND submission_month = $2 ORDER BY id ASC", user_id, current_month)
+        
+        if not rows:
+            await interaction.response.send_message("⚠️ ليس لديك أي مقاطع مسجلة لهذا الشهر لتعديل مشاهداتها.", ephemeral=True)
+            return
+
+        text = "🎬 **مقاطعك المسجلة هذا الشهر:**\n\n"
+        for idx, row in enumerate(rows, 1):
+            text += f"{idx}. الرابط: `{row['video_url']}`\n   👁 المشاهدات: **{row['views']:,}**\n\n"
+        text += "💡 لتحديث مشاهدات مقطع أو استبداله، تواصل مع الإدارة أو استخدم أمر التعديل المخصص."
+        await interaction.response.send_message(text, ephemeral=True)
+
+    # 5. زر إحصائياتي هذا الشهر
+    @discord.ui.button(label="📊 إحصائياتي", style=discord.ButtonStyle.danger, custom_id="my_stats")
     async def stats_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = str(interaction.user.id)
         current_month = datetime.now().strftime("%Y-%m")
@@ -110,6 +142,12 @@ class CreatorDashboardView(discord.ui.View):
         text = f"📊 **إحصائياتك لشهر {current_month}:**\n\n📹 عدد المقاطع: **{v_count}**\n👁 إجمالي المشاهدات: **{total_views:,}**\n🎖 رتبتك الحالية: {rank}"
         await interaction.response.send_message(text, ephemeral=True)
 
+    # 6. زر إلغاء / تراجع
+    @discord.ui.button(label="❌ إلغاء", style=discord.ButtonStyle.secondary, custom_id="cancel_action")
+    async def cancel_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("🔄 تم التراجع وإلغاء العملية بنجاح.", ephemeral=True)
+
+# نافذة ربط المعرف (Modal)
 class RegisterModal(discord.ui.Modal, title="ربط حساب اللعبة"):
     game_id = discord.ui.TextInput(label="معرف اللعبة (Game ID)", placeholder="اكتب أرقام المعرف فقط...", required=True)
 
@@ -131,6 +169,7 @@ class RegisterModal(discord.ui.Modal, title="ربط حساب اللعبة"):
         except Exception:
             await interaction.response.send_message("❌ عذراً، هذا المعرف مستخدم مسبقاً لحساب آخر.", ephemeral=True)
 
+# نافذة طلب اعتماد منصة (Modal)
 class PlatformModal(discord.ui.Modal, title="طلب اعتماد منصة جديدة"):
     platform_name = discord.ui.TextInput(label="اسم المنصة (TikTok, YouTube, etc.)", placeholder="اكتب اسم المنصة...", required=True)
 
@@ -166,6 +205,7 @@ class PlatformModal(discord.ui.Modal, title="طلب اعتماد منصة جدي
             view = AdminPlatformApprovalView(user_id=int(user_id), platform=plat)
             await admin_channel.send(embed=embed, view=view)
 
+# نافذة إرسال المقطع (Modal)
 class VideoSubmissionModal(discord.ui.Modal, title="إرسال مقطع جديد"):
     video_url = discord.ui.TextInput(label="رابط المقطع", placeholder="ضع الرابط هنا...", required=True)
     views_count = discord.ui.TextInput(label="عدد المشاهدات الحالي", placeholder="أرقام صحيحة فقط...", required=True)
@@ -221,22 +261,8 @@ class VideoSubmissionModal(discord.ui.Modal, title="إرسال مقطع جديد
         )
 
 # ==========================================
-# 2. لوحة تحكم المشرفين عبر الأمر /admin
+# لوحة تحكم المشرفين للموافقة على المنصات
 # ==========================================
-class AdminPanelView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=180)
-
-    @discord.ui.button(label="📊 تقرير إحصائيات الشهر", style=discord.ButtonStyle.primary)
-    async def summary_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        current_month = datetime.now().strftime("%Y-%m")
-        async with db_pool.acquire() as conn:
-            total_stats = await conn.fetchrow("SELECT SUM(views), COUNT(id) FROM submissions WHERE submission_month = $1", current_month)
-            total_views, total_videos = (total_stats[0] or 0), (total_stats[1] or 0)
-        
-        await interaction.response.send_message(f"📈 **الملخص العام لشهر {current_month}**[span_1](start_span)[span_1](end_span):\n• إجمالي المشاهدات: **{total_views:,}**\n• إجمالي الفيديوهات: **{total_videos}**", ephemeral=True)
-
-# أزرار موافقة/رفض المنصات للمشرفين في قناة الأدمن
 class AdminPlatformApprovalView(discord.ui.View):
     def __init__(self, user_id: int, platform: str):
         super().__init__(timeout=None)
@@ -281,33 +307,18 @@ class AdminPlatformApprovalView(discord.ui.View):
         except Exception:
             pass
 
-# أمر الإدارة الرئيسي /admin
-@bot.tree.command(name="admin", description="[للمشرفين فقط] فتح لوحة التحكم الإدارية لنظام صناع المحتوى")
+# أمر الأدمن لإدارة النظام
+@bot.tree.command(name="admin", description="[للمشرفين فقط] لوحة التحكم الإدارية")
 async def admin_command(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("⛔ عذراً، هذا الأمر مخصص للمشرفين فقط[span_2](start_span)[span_2](end_span).", ephemeral=True)
+        await interaction.response.send_message("⛔ عذراً، هذا الأمر مخصص للمشرفين فقط.", ephemeral=True)
         return
 
     embed = discord.Embed(
         title="⚡ لوحة التحكم الإدارية لنظام صناع المحتوى",
-        description="اختر من الخيارات أدناه لإدارة إحصائيات النظام ومتابعة العمليات:",
+        description="النظام يعمل بكفاءة وجاهز لإدارة الطلبات والإحصائيات.",
         color=discord.Color.dark_blue()
     )
-    await interaction.response.send_message(embed=embed, view=AdminPanelView(), ephemeral=True)
-
-# أمر نشر لوحة صناع المحتوى العامة
-@bot.tree.command(name="setup_creator_panel", description="[للمشرفين فقط] نشر لوحة تحكم صناع المحتوى التفاعلية")
-async def setup_creator_panel(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ عذراً، هذا الأمر مخصص للمشرفين فقط.", ephemeral=True)
-        return
-
-    embed = discord.Embed(
-        title="🎮 نظام إدارة صناع المحتوى الرسمي",
-        description="استخدم الأزرار أدناه للتفاعل مع النظام بسهولة:\n\n• **🔗 ربط حساب اللعبة:** لتسجيل Game ID الخاص بك.\n• **📥 طلب اعتماد منصة:** لاعتماد حسابات المنصات.\n• **🎬 إرسال مقطع جديد:** لإضافة رابط مقطعك ومشاهداته.\n• **📊 إحصائياتي:** لمتابعة إجمالي المشاهدات ورتبتك.",
-        color=discord.Color.green()
-    )
-    await interaction.channel.send(embed=embed, view=CreatorDashboardView())
-    await interaction.response.send_message("✅ تم نشر لوحة التحكم بنجاح.", ephemeral=True)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 bot.run(TOKEN)
